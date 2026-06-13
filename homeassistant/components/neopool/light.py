@@ -1,0 +1,202 @@
+"""Light platform for the NeoPool integration."""
+
+import logging
+from typing import Any
+
+from neopool_modbus.registers import EXEC_REGISTER, is_valid_relay_gpio
+
+from homeassistant.components.light import ColorMode, LightEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from . import NeoPoolConfigEntry
+from .const import LIGHT_DEFINITIONS
+from .coordinator import NeoPoolCoordinator
+from .entity import NeoPoolEntity
+
+_LOGGER = logging.getLogger(__name__)
+
+PARALLEL_UPDATES = 1
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: NeoPoolConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up NeoPool lights from a config entry."""
+    coordinator = entry.runtime_data
+    entry_id = entry.entry_id
+
+    entities = []
+
+    if coordinator.data is None:
+        _LOGGER.warning("No data from Modbus, skipping light setup!")
+        return
+
+    for key, props in LIGHT_DEFINITIONS.items():
+        # Only create light if enabled in options
+        option_key = props.get("option")
+        if option_key and not entry.options.get(option_key, False):
+            continue
+        # Skip if lighting relay is not assigned.
+        # Only enforce when the GPIO key is present in data; a missing key
+        # (e.g. old capability snapshot) must not suppress the entity.
+        if "MBF_PAR_LIGHTING_GPIO" in coordinator.data and not is_valid_relay_gpio(
+            coordinator.data["MBF_PAR_LIGHTING_GPIO"] or 0
+        ):
+            continue
+
+        entities.append(NeoPoolLight(coordinator, entry_id, key, props))
+
+    async_add_entities(entities)
+
+
+class NeoPoolLight(NeoPoolEntity, LightEntity):
+    """Representation of a NeoPool light entity."""
+
+    def __init__(
+        self,
+        coordinator: NeoPoolCoordinator,
+        entry_id: str,
+        key: str,
+        props: dict[str, Any],
+    ) -> None:
+        """Initialize the NeoPool light entity."""
+        super().__init__(coordinator, entry_id)
+        self._key = key
+        self._attr_suggested_object_id = (
+            f"{self.coordinator.device_slug}_{NeoPoolEntity.slugify(self._key)}"
+        )
+        # Use entry.unique_id (serial-based in v2+) for stable identity, fallback to entry_id
+        device_id = self.coordinator.entry.unique_id or self._entry_id
+        self._attr_unique_id = f"{device_id}_{self._key.lower()}"
+        self._attr_translation_key = NeoPoolEntity.slugify(self._key)
+
+        self._switch_type = props.get("switch_type") or None
+
+        # Initialize properties for relay timer switches
+        self.timer_block_addr: int | None = props.get("timer_block_addr")
+        self.function_addr: int | None = props.get("function_addr")
+        self.function_code: int | None = props.get("function_code")
+
+        _LOGGER.debug(
+            "INIT: suggested_object_id=%s, translation_key=%s, has_entity_name=%s",
+            self._attr_suggested_object_id,
+            self._attr_translation_key,
+            getattr(self, "has_entity_name", None),
+        )
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the light ON."""
+        if self.coordinator.winter_mode:
+            _LOGGER.warning(
+                "Winter mode is active — ignoring turn_on for %s", self._key
+            )
+            return
+        client = getattr(self.coordinator, "client", None)
+        if client is None:  # pragma: no cover
+            _LOGGER.error("Modbus client not available for writing registers.")
+            return
+        if self._switch_type == "relay_timer":
+            if (
+                self.function_addr is None
+                or self.function_code is None
+                or self.timer_block_addr is None
+            ):  # pragma: no cover
+                _LOGGER.error("Missing relay_timer config for %s", self._key)
+                return
+            _LOGGER.debug(
+                "Turning ON %s: function_addr=0x%04X, timer_block_addr=0x%04X",
+                self._key,
+                self.function_addr,
+                self.timer_block_addr,
+            )
+            await client.async_write_register(
+                self.function_addr, self.function_code
+            )  # Set function (if needed)
+            await client.async_write_register(self.timer_block_addr, 3)  # Always ON
+            await client.async_write_register(EXEC_REGISTER, 1)  # Commit
+
+        # Optimistic update + schedule follow-up
+        self._optimistic_update(True)
+        if self.coordinator.data is not None:
+            self.coordinator.async_set_updated_data(self.coordinator.data)
+        self.coordinator.request_refresh_with_followup()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the light OFF."""
+        if self.coordinator.winter_mode:
+            _LOGGER.warning(
+                "Winter mode is active — ignoring turn_off for %s", self._key
+            )
+            return
+        client = getattr(self.coordinator, "client", None)
+        if client is None:  # pragma: no cover
+            _LOGGER.error("Modbus client not available for writing registers.")
+            return
+        if self._switch_type == "relay_timer":
+            if self.timer_block_addr is None:  # pragma: no cover
+                _LOGGER.error("Missing timer_block_addr for %s", self._key)
+                return
+            _LOGGER.debug(
+                "Turning OFF %s: timer_block_addr=0x%04X",
+                self._key,
+                self.timer_block_addr,
+            )
+            await client.async_write_register(self.timer_block_addr, 4)  # Always OFF
+            await client.async_write_register(EXEC_REGISTER, 1)  # Commit
+
+        # Optimistic update + schedule follow-up
+        self._optimistic_update(False)
+        if self.coordinator.data is not None:
+            self.coordinator.async_set_updated_data(self.coordinator.data)
+        self.coordinator.request_refresh_with_followup()
+
+    def _optimistic_update(self, state: bool) -> None:
+        """Apply an optimistic state update to coordinator data."""
+        data = self.coordinator.data
+        if data is None:  # pragma: no cover
+            return
+        if self._switch_type == "relay_timer":
+            data["relay_light_enable"] = 3 if state else 4
+
+    async def async_added_to_hass(self) -> None:
+        """Run when the entity is added to hass."""
+        _LOGGER.debug(
+            "ADDED: entity_id=%s, translation_key=%s, has_entity_name=%s",
+            self.entity_id,
+            self._attr_translation_key,
+            getattr(self, "has_entity_name", None),
+        )
+        await super().async_added_to_hass()
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if the light is ON."""
+        if self._switch_type == "relay_timer":
+            enable_val = self.coordinator.data.get("relay_light_enable", None)
+            return enable_val == 3  # ON if ALWAYS ON
+        return False  # pragma: no cover
+
+    @property
+    def available(self) -> bool:
+        """Return True if the light is available."""
+        if not super().available:
+            return False
+        if self._switch_type == "relay_timer":
+            mode_val = self.coordinator.data.get("relay_light_enable", None)
+            return mode_val in (0, 3, 4)
+        return True  # pragma: no cover
+
+    @property
+    def supported_color_modes(self) -> set[ColorMode]:
+        """Return the color modes supported by this light."""
+        # For simple on/off light, the correct mode is COLOR_MODE_ONOFF (or ColorMode.ONOFF)
+        return {ColorMode.ONOFF}
+
+    @property
+    def color_mode(self) -> ColorMode:
+        """Return the current color mode of the light."""
+        # Actual mode is always onoff, as brightness and color are not available
+        return ColorMode.ONOFF

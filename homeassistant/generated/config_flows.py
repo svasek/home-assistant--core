@@ -493,6 +493,7 @@ FLOWS = {
         "nasweb",
         "neato",
         "nederlandse_spoorwegen",
+        "neopool",
         "ness_alarm",
         "nest",
         "netatmo",

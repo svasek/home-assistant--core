@@ -1,0 +1,1226 @@
+"""Constants for the NeoPool integration."""
+
+import logging
+from typing import Any
+
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
+from homeassistant.components.number import NumberDeviceClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.const import EntityCategory, Platform
+
+DOMAIN = "neopool"
+NAME = "NeoPool"
+
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.LIGHT,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
+
+LOGGER = logging.getLogger(__name__)
+
+DEFAULT_TIMER_RESOLUTION = 15  # in minutes
+DEFAULT_SCAN_INTERVAL = 30  # in seconds
+FOLLOW_UP_REFRESH_DELAY = (
+    2.0  # seconds — delay before a second refresh after IO entity actions
+)
+DEFAULT_PORT = 502
+DEFAULT_SLAVE_ID = 1
+CONF_FILTRATION_PUMP_POWER = "filtration_pump_power"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ConfigEntry schema version
+# ─────────────────────────────────────────────────────────────────────────────
+# Single source of truth for the ConfigEntry version: imported by both
+# `migration.py` (which writes it during migrations) and `config_flow.py`
+# (whose `NeoPoolConfigFlow.VERSION` class attribute mirrors it so HA
+# stamps fresh entries at the current schema version). Lives in const.py
+# rather than migration.py so the two consumers are symmetric — neither
+# is the "owner". See migration.py for the per-step semantics (v1→v2,
+# v2→v3, v3→v4) and which code path performs each transition.
+CURRENT_VERSION = 4
+
+# Command registers that auto-clear to 0 after write; read-back verification must be skipped.
+# MBF_RELAY_STATE has 7 relays (bits 0-6); MBF_PAR_UV_RELAY_GPIO is a 1-based index.
+
+
+# GPIO registers that assign physical relay outputs.
+# Used for sanity-checking register values after the first Modbus read.
+GPIO_REGISTERS = {
+    "MBF_PAR_FILT_GPIO": "Filtration relay",
+    "MBF_PAR_LIGHTING_GPIO": "Lighting relay",
+    "MBF_PAR_HEATING_GPIO": "Heating relay",
+    "MBF_PAR_PH_ACID_RELAY_GPIO": "pH acid pump relay",
+    "MBF_PAR_PH_BASE_RELAY_GPIO": "pH base pump relay",
+    "MBF_PAR_RX_RELAY_GPIO": "Redox pump relay",
+    "MBF_PAR_CL_RELAY_GPIO": "Chlorine pump relay",
+    "MBF_PAR_CD_RELAY_GPIO": "Conductivity pump relay",
+    "MBF_PAR_UV_RELAY_GPIO": "UV lamp relay",
+    "MBF_PAR_FILTVALVE_GPIO": "Filter valve relay",
+}
+
+# Capability keys that drive entity-creation logic in every platform's async_setup_entry.
+# They are snapshotted when winter mode is enabled and persisted in entry.options so that
+# platforms can set up the correct set of entities after a HA restart in winter mode.
+CAPABILITY_KEYS = (
+    "MBF_PAR_MODEL",
+    "MBF_PAR_TEMPERATURE_ACTIVE",
+    "MBF_PAR_FILTRATION_CONF",
+    "MBF_PAR_HEATING_GPIO",
+    "MBF_PAR_HIDRO_NOM",
+    "MBF_PAR_HIDRO_COVER_ENABLE",
+    "MBF_PAR_PH_ACID_RELAY_GPIO",
+    "MBF_PAR_PH_BASE_RELAY_GPIO",
+    "MBF_PAR_RX_RELAY_GPIO",
+    "MBF_PAR_CL_RELAY_GPIO",
+    "MBF_PAR_CD_RELAY_GPIO",
+    "MBF_PAR_UV_RELAY_GPIO",
+    "MBF_PAR_RELAY_PH",
+    "MBF_PAR_FILT_GPIO",
+    "MBF_PAR_LIGHTING_GPIO",
+    "MBF_PAR_FILTVALVE_ENABLE",
+    "MBF_PAR_FILTVALVE_GPIO",
+    "Hydrolysis module detected",
+    "pH measurement module detected",
+    "Redox measurement module detected",
+    "Chlorine measurement module detected",
+    "Conductivity measurement module detected",
+)
+
+# Entity keys removed in past releases. async_setup_entry() uses this list to
+# purge orphaned entity-registry entries so they don't linger as "unavailable".
+REMOVED_ENTITY_KEYS = (
+    # Removed in PR #117 — merged into polarity enum sensors
+    "ion in dead time",
+    "ion in pol1",
+    "ion in pol2",
+    "hidro in dead time",
+    "hidro in pol1",
+    "hidro in pol2",
+    # Removed in PR #118 — redundant / not useful as sensors
+    "hidro on target",
+    "hidro chlorine flow indicator fl2",
+    "hidro cell flow fl1",
+    # Removed in PR #119 — merged into PH_PUMP_STATUS enum sensor
+    "ph acid pump active",
+    "ph pump active",
+    # Added in PR #140, removed — bit 7 too sensitive for practical use
+    "ph regulation out of range",
+    "redox regulation out of range",
+    "chlorine regulation out of range",
+    "conductivity regulation out of range",
+)
+
+# Period keys for relay timer dropdowns. Keys map to translation strings
+# in translations/<lang>.json (e.g. "1_day" → "1 day"); values are the
+# corresponding lengths in seconds the device stores in the timer block's
+# `period` field. This dict and its inverse drive the HA `select` entity
+# options — they are not part of the Modbus protocol and stay in the
+# integration rather than in the neopool-modbus library.
+PERIOD_MAP = {
+    "1_day": 86400,
+    "2_days": 2 * 86400,
+    "3_days": 3 * 86400,
+    "4_days": 4 * 86400,
+    "5_days": 5 * 86400,
+    "1_week": 7 * 86400,
+    "2_weeks": 14 * 86400,
+    "3_weeks": 21 * 86400,
+    "4_weeks": 28 * 86400,
+}
+
+PERIOD_SECONDS_TO_KEY = {v: k for k, v in PERIOD_MAP.items()}
+
+SENSOR_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "MBF_ION_CURRENT": {
+        "name": "Ionization Level",
+        "unit": "%",
+        "device_class": SensorDeviceClass.POWER_FACTOR,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "MBF_HIDRO_CURRENT": {
+        "name": "Hydrolysis Intensity",
+        "unit": "%",
+        "device_class": SensorDeviceClass.POWER_FACTOR,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "display_precision": 0,
+    },
+    "MBF_MEASURE_PH": {
+        "name": "pH Level",
+        "device_class": SensorDeviceClass.PH,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "MBF_MEASURE_RX": {
+        "name": "Redox Potential",
+        "unit": "mV",
+        "device_class": SensorDeviceClass.VOLTAGE,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "MBF_MEASURE_CL": {
+        "name": "Salt Level",
+        "unit": "ppm",
+        "device_class": None,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "MBF_MEASURE_CONDUCTIVITY": {
+        "name": "Conductivity Level",
+        "unit": "%",
+        "device_class": SensorDeviceClass.POWER_FACTOR,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "display_precision": 0,
+    },
+    "MBF_MEASURE_TEMPERATURE": {
+        "name": "Water Temperature",
+        "unit": "°C",
+        "device_class": SensorDeviceClass.TEMPERATURE,
+        "state_class": SensorStateClass.MEASUREMENT,
+    },
+    "MBF_HIDRO_VOLTAGE": {
+        "name": "Hydrolysis Voltage",
+        "unit": "V",
+        "device_class": SensorDeviceClass.VOLTAGE,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "display_precision": 1,
+        "entity_registry_enabled_default": False,
+    },
+    "MBF_PAR_FILT_MODE": {
+        "name": "Filtration Mode",
+        "unit": None,
+        "device_class": SensorDeviceClass.ENUM,
+        "state_class": None,
+    },
+    "MBF_PH_STATUS_ALARM": {
+        "name": "pH Alarm",
+        "unit": None,
+        "device_class": SensorDeviceClass.ENUM,
+        "state_class": None,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "HIDRO_POLARITY": {
+        "name": "Hydrolysis Polarity",
+        "unit": None,
+        "device_class": SensorDeviceClass.ENUM,
+        "state_class": None,
+    },
+    "ION_POLARITY": {
+        "name": "Ionizer Polarity",
+        "unit": None,
+        "device_class": SensorDeviceClass.ENUM,
+        "state_class": None,
+    },
+    "PH_PUMP_STATUS": {
+        "name": "pH Pump Status",
+        "unit": None,
+        "device_class": SensorDeviceClass.ENUM,
+        "state_class": None,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "FILTRATION_SPEED": {
+        "name": "Filtration Current Speed",
+        "unit": None,
+        "device_class": SensorDeviceClass.ENUM,
+        "state_class": None,
+    },
+    "MBF_PAR_INTELLIGENT_INTERVALS": {
+        "name": "Intelligent Mode Intervals",
+        "unit": None,
+        "device_class": None,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "MBF_PAR_INTELLIGENT_TT_NEXT_INTERVAL": {
+        "name": "Intelligent Mode Next Interval",
+        "unit": None,
+        "device_class": SensorDeviceClass.TIMESTAMP,
+        "state_class": None,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "MBF_PAR_FILTVALVE_REMAINING": {
+        "name": "Backwash Time Remaining",
+        "unit": "s",
+        "device_class": SensorDeviceClass.DURATION,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "display_precision": 0,
+    },
+    "FILTRATION_REMAINING": {
+        "name": "Filtration Time Remaining",
+        "unit": "s",
+        "device_class": SensorDeviceClass.DURATION,
+        "state_class": None,
+        "display_precision": 0,
+        "entity_registry_enabled_default": False,
+    },
+    # Hydrolysis cell runtime counters. The firmware exposes these as 32-bit
+    # values split across two 16-bit register pairs (``*_LOW``/``*_HIGH``);
+    # NeoPoolSensor.native_value combines them via combine_u32(). Resetting the
+    # partial counter is wired through the RESET_CELL_PARTIAL button.
+    "CELL_RUNTIME_TOTAL": {
+        "name": "Cell Runtime Total",
+        "unit": "s",
+        "suggested_unit_of_measurement": "h",
+        "device_class": SensorDeviceClass.DURATION,
+        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "display_precision": 0,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "entity_registry_enabled_default": False,
+        "register_pair": ("MBF_CELL_RUNTIME_LOW", "MBF_CELL_RUNTIME_HIGH"),
+    },
+    "CELL_RUNTIME_PART": {
+        "name": "Cell Runtime Since Reset",
+        "unit": "s",
+        "suggested_unit_of_measurement": "h",
+        "device_class": SensorDeviceClass.DURATION,
+        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "display_precision": 0,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "entity_registry_enabled_default": False,
+        "register_pair": ("MBF_CELL_RUNTIME_PART_LOW", "MBF_CELL_RUNTIME_PART_HIGH"),
+    },
+    "CELL_RUNTIME_POLA": {
+        "name": "Cell Runtime Polarity 1",
+        "unit": "s",
+        "suggested_unit_of_measurement": "h",
+        "device_class": SensorDeviceClass.DURATION,
+        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "display_precision": 0,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "entity_registry_enabled_default": False,
+        "register_pair": ("MBF_CELL_RUNTIME_POLA_LOW", "MBF_CELL_RUNTIME_POLA_HIGH"),
+    },
+    "CELL_RUNTIME_POLB": {
+        "name": "Cell Runtime Polarity 2",
+        "unit": "s",
+        "suggested_unit_of_measurement": "h",
+        "device_class": SensorDeviceClass.DURATION,
+        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "display_precision": 0,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "entity_registry_enabled_default": False,
+        "register_pair": ("MBF_CELL_RUNTIME_POLB_LOW", "MBF_CELL_RUNTIME_POLB_HIGH"),
+    },
+    "CELL_RUNTIME_POL_CHANGES": {
+        "name": "Cell Polarity Changes",
+        "unit": None,
+        "device_class": None,
+        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "display_precision": 0,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+        "entity_registry_enabled_default": False,
+        "register_pair": (
+            "MBF_CELL_RUNTIME_POL_CHANGES_LOW",
+            "MBF_CELL_RUNTIME_POL_CHANGES_HIGH",
+        ),
+    },
+    CONF_FILTRATION_PUMP_POWER: {
+        "name": "Filtration Pump Power",
+        "unit": "W",
+        "device_class": SensorDeviceClass.POWER,
+        "state_class": SensorStateClass.MEASUREMENT,
+        "display_precision": 0,
+    },
+}
+
+BINARY_SENSOR_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "Device Time Out Of Sync": {
+        "name": "Device Time Out Of Sync",
+        "device_class": BinarySensorDeviceClass.PROBLEM,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Relay states
+    "pH Acid Pump": {
+        "name": "pH Regulating",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Filtration Pump": {
+        "name": "Filtration Running",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+    },
+    "Pool Light": {
+        "name": "Pool Light",
+        "device_class": BinarySensorDeviceClass.LIGHT,
+        "option": "use_light",
+    },
+    "AUX1": {
+        "name": "Auxiliary Relay 1",
+        "device_class": BinarySensorDeviceClass.POWER,
+        "option": "use_aux1",
+    },
+    "AUX2": {
+        "name": "Auxiliary Relay 2",
+        "device_class": BinarySensorDeviceClass.POWER,
+        "option": "use_aux2",
+    },
+    "AUX3": {
+        "name": "Auxiliary Relay 3",
+        "device_class": BinarySensorDeviceClass.POWER,
+        "option": "use_aux3",
+    },
+    "AUX4": {
+        "name": "Auxiliary Relay 4",
+        "device_class": BinarySensorDeviceClass.POWER,
+        "option": "use_aux4",
+    },
+    # pH/Redox/CL/CD status bits from decode_ph_rx_cl_cd_status_bits
+    # pH
+    "pH module control status": {
+        "name": "pH Flow Detection Control",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Note: "pH acid pump active" and "pH pump active" (MBF_PH_STATUS bits 11/12)
+    # are merged into the PH_PUMP_STATUS enum sensor.
+    "pH control module": {
+        "name": "pH Regulation Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "pH measurement active": {
+        "name": "pH Measurement",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "pH measurement module detected": {
+        "name": "pH Measurement Module Detected",
+        "device_class": BinarySensorDeviceClass.CONNECTIVITY,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Redox
+    "Redox pump active": {
+        "name": "Redox Pump Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Redox control module": {
+        "name": "Redox Regulation Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Redox measurement active": {
+        "name": "Redox Measurement",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Redox measurement module detected": {
+        "name": "Redox Measurement Module Detected",
+        "device_class": BinarySensorDeviceClass.CONNECTIVITY,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Chlorine
+    "Chlorine flow sensor problem": {
+        "name": "Chlorine Flow Sensor",
+        "device_class": BinarySensorDeviceClass.PROBLEM,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Chlorine pump active": {
+        "name": "Chlorine Pump Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Chlorine control module": {
+        "name": "Chlorine Regulation Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Chlorine measurement active": {
+        "name": "Chlorine Measurement",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Chlorine measurement module detected": {
+        "name": "Chlorine Measurement Module Detected",
+        "device_class": BinarySensorDeviceClass.CONNECTIVITY,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Conductivity
+    "Conductivity pump active": {
+        "name": "Conductivity Pump Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Conductivity control module": {
+        "name": "Conductivity Regulation Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Conductivity measurement active": {
+        "name": "Conductivity Measurement",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Conductivity measurement module detected": {
+        "name": "Conductivity Measurement Module Detected",
+        "device_class": BinarySensorDeviceClass.CONNECTIVITY,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Ion status bits
+    "ION On Target": {
+        "name": "Ionizer On Target",
+        "device_class": None,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "ION Low Flow": {
+        "name": "Ionizer Production Problem",
+        "device_class": BinarySensorDeviceClass.PROBLEM,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # "ION Reserved": {
+    #     "name": "Ionizer Reserved",
+    #     "device_class": None,
+    #     "entity_category": EntityCategory.DIAGNOSTIC,
+    # },
+    "ION Program time exceeded": {
+        "name": "Ionizer Program Time Exceeded",
+        "device_class": BinarySensorDeviceClass.PROBLEM,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Hydrolysis status bits
+    # Note: "HIDRO On Target" (bit 0, MBMSK_HIDRO_STATUS_ON_TARGET) removed —
+    # indicates setpoint reached, which is derivable from hidro_current vs hidro
+    # setpoint. Even Tasmota defines this bit but never displays it.
+    "HIDRO Low Flow": {
+        "name": "Hydrolysis Production Problem",
+        "device_class": BinarySensorDeviceClass.PROBLEM,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # "HIDRO Reserved": {
+    #     "name": "Hydrolysis Reserved",
+    #     "device_class": None,
+    #     "entity_category": EntityCategory.DIAGNOSTIC,
+    # },
+    # Note: "HIDRO Cell Flow FL1" (bit 3, MBMSK_HIDRO_STATUS_FL1) removed —
+    # merged into the HIDRO_POLARITY enum sensor as "no_flow" state.
+    "Pool Cover": {
+        "name": "Pool Cover",
+        "device_class": BinarySensorDeviceClass.OPENING,
+        "option": "use_cover_sensor",
+    },
+    "HIDRO Module active": {
+        "name": "Hydrolysis Enabled",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "HIDRO Module regulated": {
+        "name": "Hydrolysis Regulation Active",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "HIDRO Activated by the RX module": {
+        "name": "Hydrolysis Activated by Redox Module",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "HIDRO Chlorine shock mode": {
+        "name": "Hydrolysis Chlorine Shock Mode",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Note: "HIDRO Chlorine flow indicator FL2" (bit 9, MBMSK_HIDRO_STATUS_FL2) removed —
+    # redundant with "Chlorine flow sensor problem" (MBF_CL_STATUS bit 3) for devices
+    # with a chlorine module, and irrelevant for devices without one.
+    "HIDRO Activated by the CL module": {
+        "name": "Hydrolysis Activated by Chlorine Module",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "Heating": {
+        "name": "Heating",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    "UV Lamp": {
+        "name": "UV Lamp",
+        "device_class": BinarySensorDeviceClass.RUNNING,
+        "entity_category": EntityCategory.DIAGNOSTIC,
+    },
+    # Note: "HIDRO in dead time", "HIDRO in Pol1" and "HIDRO in Pol2" are merged
+    # into the HIDRO_POLARITY enum sensor.
+    # Similarly, "ION in dead time", "ION in Pol1" and "ION in Pol2" are merged
+    # into the ION_POLARITY enum sensor.
+}
+
+NUMBER_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "MBF_PAR_HIDRO": {
+        "name": "Hydrolysis target production level",
+        "unit": "%",
+        "min": 0.0,
+        "max": 100.0,
+        "step": 1.0,
+        "register": 0x0502,  # MBF_PAR_HIDRO
+        "scale": 10.0,
+        "device_class": None,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_PH1": {
+        "name": "pH Max Limit",
+        "min": 0.0,
+        "max": 14.0,
+        "step": 0.1,
+        "register": 0x0504,  # MBF_PAR_PH1
+        "scale": 100.0,
+        "device_class": NumberDeviceClass.PH,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_PH2": {
+        "name": "pH Min Limit",
+        "min": 0.0,
+        "max": 14.0,
+        "step": 0.1,
+        "register": 0x0505,  # MBF_PAR_PH2
+        "scale": 100.0,
+        "device_class": NumberDeviceClass.PH,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_RX1": {
+        "name": "Redox Setpoint",
+        "unit": "mV",
+        "min": 0.0,
+        "max": 1000.0,
+        "step": 1.0,
+        "register": 0x0508,  # MBF_PAR_RX1
+        "scale": 1.0,
+        "device_class": NumberDeviceClass.VOLTAGE,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_CL1": {
+        "name": "Chlorine Setpoint",
+        "unit": "ppm",
+        "min": 0.0,
+        "max": 10.0,
+        "step": 0.1,
+        "register": 0x050A,  # MBF_PAR_CL1
+        "scale": 100.0,
+        "device_class": None,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_HEATING_TEMP": {
+        "name": "Temperature Setpoint",
+        "unit": "°C",
+        "min": 0.0,
+        "max": 40.0,
+        "step": 1.0,
+        "register": 0x0416,  # MBF_PAR_HEATING_TEMP
+        "scale": 1.0,
+        "device_class": NumberDeviceClass.TEMPERATURE,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_SMART_TEMP_HIGH": {
+        "name": "Smart Upper Temperature",
+        "unit": "°C",
+        "min": 0.0,
+        "max": 40.0,
+        "step": 1.0,
+        "register": 0x0418,  # MBF_PAR_SMART_TEMP_HIGH
+        "scale": 1.0,
+        "device_class": NumberDeviceClass.TEMPERATURE,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_SMART_TEMP_LOW": {
+        "name": "Smart Lower Temperature",
+        "unit": "°C",
+        "min": 0.0,
+        "max": 40.0,
+        "step": 1.0,
+        "register": 0x0419,  # MBF_PAR_SMART_TEMP_LOW
+        "scale": 1.0,
+        "device_class": NumberDeviceClass.TEMPERATURE,
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_PAR_HIDRO_COVER_REDUCTION": {
+        "name": "Hydrolysis Cover Reduction Percentage",
+        "unit": "%",
+        "min": 0.0,
+        "max": 100.0,
+        "step": 1.0,
+        "register": 0x042D,  # MBF_PAR_HIDRO_COVER_REDUCTION
+        "data_key": "MBF_PAR_HIDRO_COVER_REDUCTION",  # coordinator data key (combined register)
+        "mask": 0x00FF,
+        "shift": 0,
+        "scale": 1.0,
+        "device_class": None,
+        "entity_category": EntityCategory.CONFIG,
+        "option": "use_cover_sensor",
+    },
+    "MBF_PAR_HIDRO_SHUTDOWN_TEMPERATURE": {
+        "name": "Hydrolysis Shutdown Temperature",
+        "unit": "°C",
+        "min": 1.0,
+        "max": 40.0,
+        "step": 1.0,
+        "register": 0x042D,  # MBF_PAR_HIDRO_COVER_REDUCTION (upper byte)
+        "data_key": "MBF_PAR_HIDRO_COVER_REDUCTION",  # coordinator data key (combined register)
+        "mask": 0xFF00,
+        "shift": 8,
+        "scale": 1.0,
+        "device_class": NumberDeviceClass.TEMPERATURE,
+        "entity_category": EntityCategory.CONFIG,
+        "option": "use_cover_sensor",
+    },
+}
+
+BUTTON_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "SYNC_TIME": {
+        "name": "Synchronize Device Time",
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "MBF_ESCAPE": {
+        "name": "Clear Errors",
+        "entity_category": EntityCategory.CONFIG,
+    },
+    "BACKWASH": {
+        "name": "Start Backwash",
+    },
+    "RESET_CELL_PARTIAL": {
+        "name": "Reset Partial Cell Runtime",
+        "entity_category": EntityCategory.CONFIG,
+        "entity_registry_enabled_default": False,
+    },
+}
+
+SELECT_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "MBF_PAR_FILT_MODE": {
+        "name": "Filtration Mode",
+        "options_map": {
+            0: "manual",
+            1: "auto",
+            2: "heating",
+            3: "smart",
+            4: "intelligent",
+            13: "backwash",
+        },
+        "register": 0x0411,  # FILTRATION_MODE_REGISTER
+    },
+    "MBF_PAR_FILTRATION_SPEED": {
+        "name": "Filtration Speed",
+        "options_map": {0: "low", 1: "mid", 2: "high"},
+        "register": 0x050F,
+        "mask": 0x0070,
+        "shift": 4,
+    },
+    "MBF_CELL_BOOST": {
+        "name": "Boost Mode",
+        "options_map": {
+            0: "inactive",
+            1: "active",
+            2: "active_redox",
+        },
+        "register": 0x020C,
+    },
+    "MBF_PAR_FILTVALVE_MODE": {
+        "name": "Backwash Valve Mode",
+        "entity_category": EntityCategory.CONFIG,
+        "options_map": {
+            # 0: "disabled",     # valve disabled - hidden (covered by MBF_PAR_FILTVALVE_ENABLE)
+            1: "enabled",  # timer-controlled (MBV_PAR_CTIMER_ENABLED)
+            # 2: "auto_linked",  # linked to parent relay - not applicable for filtvalve
+            3: "always_on",  # MBV_PAR_CTIMER_ALWAYS_ON
+            4: "always_off",  # MBV_PAR_CTIMER_ALWAYS_OFF
+        },
+        "register": 0x04E9,
+    },
+    "MBF_PAR_FILTVALVE_PERIOD_MINUTES": {
+        "name": "Backwash Repeat Interval",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "mapped_register",
+        "fallback_suffix": "m",
+        "options_map": {
+            1440: "1_day",
+            2880: "2_days",
+            4320: "3_days",
+            5760: "4_days",
+            7200: "5_days",
+            10080: "1_week",
+            20160: "2_weeks",
+            30240: "3_weeks",
+            40320: "4_weeks",
+        },
+        "register": 0x04ED,
+    },
+    "MBF_PAR_INTELLIGENT_FILT_MIN_TIME": {
+        "name": "Intelligent Min Filtration Time",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "mapped_register",
+        "fallback_suffix": "m",
+        "options_map": {
+            120: "2h",
+            180: "3h",
+            240: "4h",
+            300: "5h",
+            360: "6h",
+            420: "7h",
+            480: "8h",
+            540: "9h",
+            600: "10h",
+            660: "11h",
+            720: "12h",
+        },
+        "register": 0x041D,
+    },
+    "MBF_PAR_RELAY_ACTIVATION_DELAY": {
+        "register": 0x0433,
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "mapped_register",
+        "write_offset": -10,  # Device adds +10s internally
+        "options_map": {
+            10: "10",
+            20: "20",
+            30: "30",
+            40: "40",
+            50: "50",
+            60: "60",
+            120: "120",
+            180: "180",
+            300: "300",
+            900: "900",
+            1800: "1800",
+            3600: "3600",
+            10800: "10800",
+        },
+    },
+    "filtration1_start": {
+        "name": "Filtration Timer 1 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_filtration1",
+    },
+    "filtration1_stop": {
+        "name": "Filtration Timer 1 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_filtration1",
+    },
+    "filtration2_start": {
+        "name": "Filtration Timer 2 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_filtration2",
+    },
+    "filtration2_stop": {
+        "name": "Filtration Timer 2 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_filtration2",
+    },
+    "filtration3_start": {
+        "name": "Filtration Timer 3 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_filtration3",
+    },
+    "filtration3_stop": {
+        "name": "Filtration Timer 3 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_filtration3",
+    },
+    "filtration1_speed": {
+        "name": "Timer 1 - Filtration Speed",
+        "entity_category": EntityCategory.CONFIG,
+        "options_map": {0: "low", 1: "mid", 2: "high"},
+        "register": 0x050F,
+        "mask": 0x0380,
+        "shift": 7,
+        "option": "use_filtration1",
+    },
+    "filtration2_speed": {
+        "name": "Timer 2 - Filtration Speed",
+        "entity_category": EntityCategory.CONFIG,
+        "options_map": {0: "low", 1: "mid", 2: "high"},
+        "register": 0x050F,
+        "mask": 0x1C00,
+        "shift": 10,
+        "option": "use_filtration2",
+    },
+    "filtration3_speed": {
+        "name": "Timer 3 - Filtration Speed",
+        "entity_category": EntityCategory.CONFIG,
+        "options_map": {0: "low", 1: "mid", 2: "high"},
+        "register": 0x050F,
+        "mask": 0xE000,
+        "shift": 13,
+        "option": "use_filtration3",
+    },
+    "relay_aux1_start": {
+        "name": "Relay AUX1 Timer 1 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux1",
+    },
+    "relay_aux1_stop": {
+        "name": "Relay AUX1 Timer 1 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux1",
+    },
+    "relay_aux1_period": {
+        "name": "Relay AUX1 Timer 1 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux1",
+    },
+    "relay_aux1b_start": {
+        "name": "Relay AUX1 Timer 2 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux1",
+    },
+    "relay_aux1b_stop": {
+        "name": "Relay AUX1 Timer 2 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux1",
+    },
+    "relay_aux1b_period": {
+        "name": "Relay AUX1 Timer 2 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux1",
+    },
+    "relay_aux2_start": {
+        "name": "Relay AUX2 Timer 1 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux2",
+    },
+    "relay_aux2_stop": {
+        "name": "Relay AUX2 Timer 1 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux2",
+    },
+    "relay_aux2_period": {
+        "name": "Relay AUX2 Timer 1 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux2",
+    },
+    "relay_aux2b_start": {
+        "name": "Relay AUX2 Timer 2 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux2",
+    },
+    "relay_aux2b_stop": {
+        "name": "Relay AUX2 Timer 2 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux2",
+    },
+    "relay_aux2b_period": {
+        "name": "Relay AUX2 Timer 2 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux2",
+    },
+    "relay_aux3_start": {
+        "name": "Relay AUX3 Timer 1 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux3",
+    },
+    "relay_aux3_stop": {
+        "name": "Relay AUX3 Timer 1 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux3",
+    },
+    "relay_aux3_period": {
+        "name": "Relay AUX3 Timer 1 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux3",
+    },
+    "relay_aux3b_start": {
+        "name": "Relay AUX3 Timer 2 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux3",
+    },
+    "relay_aux3b_stop": {
+        "name": "Relay AUX3 Timer 2 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux3",
+    },
+    "relay_aux3b_period": {
+        "name": "Relay AUX3 Timer 2 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux3",
+    },
+    "relay_aux4_start": {
+        "name": "Relay AUX4 Timer 1 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux4",
+    },
+    "relay_aux4_stop": {
+        "name": "Relay AUX4 Timer 1 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux4",
+    },
+    "relay_aux4_period": {
+        "name": "Relay AUX4 Timer 1 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux4",
+    },
+    "relay_aux4b_start": {
+        "name": "Relay AUX4 Timer 2 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux4",
+    },
+    "relay_aux4b_stop": {
+        "name": "Relay AUX4 Timer 2 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_aux4",
+    },
+    "relay_aux4b_period": {
+        "name": "Relay AUX4 Timer 2 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_aux4",
+    },
+    "relay_light_start": {
+        "name": "Relay Light Timer 1 Start",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_light",
+    },
+    "relay_light_stop": {
+        "name": "Relay Light Timer 1 Stop",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_time",
+        "register": None,
+        "option": "use_light",
+    },
+    "relay_light_period": {
+        "name": "Relay Light Timer 1 Repeat",
+        "entity_category": EntityCategory.CONFIG,
+        "select_type": "timer_period",
+        "register": None,
+        "option": "use_light",
+    },
+    "relay_aux1_mode": {
+        "name": "AUX1 Mode",
+        "options_map": {
+            # 0: "disabled",
+            1: "auto",
+            # 2: "auto_linked",
+            3: "on",
+            4: "off",
+        },
+        "register": 0x04AC,
+        "register_offset": 0,
+        "select_type": "relay_mode",
+        "option": "use_aux1",
+    },
+    "relay_aux2_mode": {
+        "name": "AUX2 Mode",
+        "options_map": {
+            # 0: "disabled",
+            1: "auto",
+            # 2: "auto_linked",
+            3: "on",
+            4: "off",
+        },
+        "register": 0x04BB,
+        "register_offset": 0,
+        "select_type": "relay_mode",
+        "option": "use_aux2",
+    },
+    "relay_aux3_mode": {
+        "name": "AUX3 Mode",
+        "options_map": {
+            # 0: "disabled",
+            1: "auto",
+            # 2: "auto_linked",
+            3: "on",
+            4: "off",
+        },
+        "register": 0x04CA,
+        "register_offset": 0,
+        "select_type": "relay_mode",
+        "option": "use_aux3",
+    },
+    "relay_aux4_mode": {
+        "name": "AUX4 Mode",
+        "options_map": {
+            # 0: "disabled",
+            1: "auto",
+            # 2: "auto_linked",
+            3: "on",
+            4: "off",
+        },
+        "register": 0x04D9,
+        "register_offset": 0,
+        "select_type": "relay_mode",
+        "option": "use_aux4",
+    },
+    "relay_light_mode": {
+        "name": "Light Mode",
+        "options_map": {
+            # 0: "disabled",
+            1: "auto",
+            # 2: "auto_linked",
+            3: "on",
+            4: "off",
+        },
+        "register": 0x0470,
+        "register_offset": 0,
+        "select_type": "relay_mode",
+        "option": "use_light",
+    },
+}
+
+SWITCH_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "WINTER_MODE": {
+        "name": "Winter Mode",
+        "entity_category": EntityCategory.CONFIG,
+        "switch_type": "winter_mode",
+    },
+    "TIME_AUTO_SYNC": {
+        "name": "Automatic Time Sync",
+        "entity_category": EntityCategory.CONFIG,
+        "switch_type": "auto_time_sync",
+    },
+    "MBF_PAR_FILT_MANUAL_STATE": {
+        "name": "Manual Filtration",
+        "entity_category": None,
+        "switch_type": "manual_filtration",
+    },
+    "MBF_PAR_CLIMA_ONOFF": {
+        "name": "Climate mode",
+        "function_addr": 0x0417,
+        "entity_category": EntityCategory.CONFIG,
+        "switch_type": "climate_mode",
+    },
+    "MBF_PAR_SMART_ANTI_FREEZE": {
+        "name": "Smart antifreeze",
+        "function_addr": 0x041A,
+        "entity_category": EntityCategory.CONFIG,
+        "switch_type": "smart_anti_freeze",
+    },
+    "MBF_PAR_UV_MODE": {
+        "name": "UV Mode",
+        "function_addr": 0x0427,
+        "entity_category": EntityCategory.CONFIG,
+        "switch_type": "uv_mode",
+    },
+    # "MBF_PAR_UV_HIDE_WARN_CLEAN": {
+    #     "name": "Suppress UV Clean Warning",
+    #     "function_addr": 0x0428,
+    #     "mask_bit": 0x0001,
+    #     "data_key": "MBF_PAR_UV_HIDE_WARN",
+    #     "entity_category": EntityCategory.CONFIG,
+    #     "switch_type": "bitmask",
+    # },
+    # "MBF_PAR_UV_HIDE_WARN_REPLACE": {
+    #     "name": "Suppress UV Replace Warning",
+    #     "function_addr": 0x0428,
+    #     "mask_bit": 0x0002,
+    #     "data_key": "MBF_PAR_UV_HIDE_WARN",
+    #     "entity_category": EntityCategory.CONFIG,
+    #     "switch_type": "bitmask",
+    # },
+    "MBF_PAR_HIDRO_COVER_ENABLE": {
+        "name": "Hydrolysis Cover Reduction",
+        "function_addr": 0x042C,
+        "mask_bit": 0x0001,
+        "data_key": "MBF_PAR_HIDRO_COVER_ENABLE",
+        "entity_category": EntityCategory.CONFIG,
+        "switch_type": "bitmask",
+        "option": "use_cover_sensor",
+    },
+    "MBF_PAR_HIDRO_TEMP_SHUTDOWN": {
+        "name": "Hydrolysis Temperature Shutdown",
+        "function_addr": 0x042C,
+        "mask_bit": 0x0002,
+        "data_key": "MBF_PAR_HIDRO_COVER_ENABLE",
+        "entity_category": EntityCategory.CONFIG,
+        "switch_type": "bitmask",
+        "option": "use_cover_sensor",
+    },
+    "aux1": {
+        "name": "Auxiliary Relay 1",
+        "switch_type": "relay_timer",
+        "timer_block_addr": 0x04AC,
+        "function_addr": 0x04B7,
+        "function_code": 0x0800,  # AUX1 relay code
+        "option": "use_aux1",
+    },
+    "aux2": {
+        "name": "Auxiliary Relay 2",
+        "switch_type": "relay_timer",
+        "timer_block_addr": 0x04BB,
+        "function_addr": 0x04C6,
+        "function_code": 0x1000,  # AUX2 relay code
+        "option": "use_aux2",
+    },
+    "aux3": {
+        "name": "Auxiliary Relay 3",
+        "switch_type": "relay_timer",
+        "timer_block_addr": 0x04CA,
+        "function_addr": 0x04D5,
+        "function_code": 0x2000,  # AUX3 relay code
+        "option": "use_aux3",
+    },
+    "aux4": {
+        "name": "Auxiliary Relay 4",
+        "switch_type": "relay_timer",
+        "timer_block_addr": 0x04D9,
+        "function_addr": 0x04E4,
+        "function_code": 0x4000,  # AUX4 relay code
+        "option": "use_aux4",
+    },
+}
+
+LIGHT_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "light": {
+        "name": "Pool Light",
+        "switch_type": "relay_timer",
+        "timer_block_addr": 0x0470,
+        "function_addr": 0x047B,
+        "function_code": 2,  # LIGHTING
+        "option": "use_light",
+    },
+}

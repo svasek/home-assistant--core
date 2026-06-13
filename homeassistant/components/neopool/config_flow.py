@@ -1,0 +1,251 @@
+"""Config flow for the NeoPool integration."""
+
+import asyncio
+import logging
+from typing import Any
+
+from neopool_modbus.registers import DEFAULT_MODBUS_FRAMER
+import voluptuous as vol
+
+from homeassistant import config_entries
+from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
+from homeassistant.core import callback
+from homeassistant.helpers import translation as ha_translation
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
+from homeassistant.util import slugify
+
+from . import NeoPoolConfigEntry
+from .const import (
+    CONF_FILTRATION_PUMP_POWER,
+    CURRENT_VERSION,
+    DEFAULT_PORT,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SLAVE_ID,
+    DOMAIN,
+    NAME,
+)
+from .helpers import async_get_device_serial
+from .options_flow import NeoPoolOptionsFlowHandler
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def is_host_port_open(host: str, port: int, timeout: int = 3) -> bool:
+    """Probe a TCP host:port to verify it accepts connections."""
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+    except TimeoutError, OSError:
+        return False
+    writer.close()
+    await writer.wait_closed()
+    return True
+
+
+class NeoPoolConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for NeoPool."""
+
+    # HA contract: ConfigFlow subclasses must declare a class-level VERSION
+    # used to stamp fresh entries and to detect when async_migrate_entry
+    # needs to run. The single source of truth lives in const.CURRENT_VERSION
+    # — this attribute just exposes it under the name HA core looks for.
+    VERSION = CURRENT_VERSION
+
+    async def _async_validate_connection(self, user_input: dict) -> dict:
+        """Validate host/port connectivity and return an errors dict."""
+        errors = {}
+        host: str = user_input[CONF_HOST]
+        port: int = user_input.get(CONF_PORT, DEFAULT_PORT)
+        if not await is_host_port_open(host, port):
+            errors[CONF_HOST] = "cannot_connect"
+        return errors
+
+    async def _async_get_default_name(self) -> str:
+        """Return the localized default device name from translations."""
+        try:
+            t = await ha_translation.async_get_translations(
+                self.hass, self.hass.config.language, "config", {DOMAIN}
+            )
+            key = f"component.{DOMAIN}.config.step.user.data.name_default"
+            return t.get(key) or NAME
+        except Exception:  # noqa: BLE001
+            # Translation lookup is best-effort; on any failure we fall
+            # back to the literal English default so the form still opens.
+            return NAME
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the initial step of the configuration flow."""
+        default_name = await self._async_get_default_name()
+        data_schema = vol.Schema(
+            {
+                vol.Optional(CONF_NAME, default=default_name): str,
+                vol.Required(CONF_HOST): str,
+                vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
+                vol.Optional("slave_id", default=DEFAULT_SLAVE_ID): int,
+                vol.Optional(
+                    "modbus_framer",
+                    default=DEFAULT_MODBUS_FRAMER,
+                ): vol.In(["tcp", "rtu"]),
+                vol.Optional(
+                    "scan_interval",
+                    default=str(DEFAULT_SCAN_INTERVAL),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            str(v) for v in [5, 10, 15, 20, 30, 45, 60, 120, 180, 300]
+                        ]
+                    )
+                ),
+                vol.Optional(
+                    CONF_FILTRATION_PUMP_POWER,
+                    default=0,
+                ): vol.All(int, vol.Range(min=0)),
+                vol.Optional(
+                    "use_filtration1",
+                    default=True,
+                ): bool,
+                vol.Optional(
+                    "use_filtration2",
+                    default=False,
+                ): bool,
+                vol.Optional(
+                    "use_filtration3",
+                    default=False,
+                ): bool,
+                vol.Optional(
+                    "use_light",
+                    default=False,
+                ): bool,
+                vol.Optional(
+                    "use_cover_sensor",
+                    default=False,
+                ): bool,
+            }
+        )
+        errors = {}
+        if user_input is not None:
+            device_name = (
+                user_input.get(CONF_NAME) or await self._async_get_default_name()
+            )
+            user_input[CONF_NAME] = device_name
+
+            # Validation 1: TCP connection
+            errors = await self._async_validate_connection(user_input)
+            if errors:
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=data_schema,
+                    errors=errors,
+                )
+
+            # Validation 2: Trial Modbus read → get serial number
+            serial_number = await async_get_device_serial(user_input)
+            if not serial_number:
+                errors[CONF_HOST] = "cannot_read_modbus"
+                _LOGGER.warning(
+                    "User cannot read from Modbus device at %s:%s",
+                    user_input.get(CONF_HOST),
+                    user_input.get(CONF_PORT),
+                )
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=data_schema,
+                    errors=errors,
+                )
+
+            # Validation 3: Duplicate prevention (unique_id based on serial)
+            unique_id = f"neopool_{serial_number}"
+            await self.async_set_unique_id(unique_id)
+            self._abort_if_unique_id_configured()
+
+            # Validation 4: Unique device name (compare slugified to catch case/spacing variants)
+            for entry in self.hass.config_entries.async_entries(DOMAIN):
+                existing_name = entry.data.get(CONF_NAME) or entry.title
+                if slugify(existing_name) == slugify(device_name):
+                    errors[CONF_NAME] = "name_already_used"
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=data_schema,
+                        errors=errors,
+                    )
+
+            # Coerce types before creating entry
+            if "scan_interval" in user_input:
+                user_input["scan_interval"] = int(user_input["scan_interval"])
+
+            _LOGGER.info(
+                "Creating new NeoPool config entry: %s (serial: …%s)",
+                device_name,
+                serial_number[-6:],
+            )
+
+            return self.async_create_entry(title=device_name, data=user_input)
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=data_schema,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle reconfiguration of an existing entry."""
+        entry_id = self.context.get("entry_id")
+        if entry_id is None:
+            return self.async_abort(reason="entry_not_found")
+        entry = self.hass.config_entries.async_get_entry(entry_id)
+        if entry is None:
+            return self.async_abort(reason="entry_not_found")
+
+        current = entry.data
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=current.get(CONF_HOST, "")): str,
+                vol.Optional(
+                    CONF_PORT, default=current.get(CONF_PORT, DEFAULT_PORT)
+                ): int,
+                vol.Optional(
+                    "slave_id", default=current.get("slave_id", DEFAULT_SLAVE_ID)
+                ): int,
+                vol.Optional(
+                    "modbus_framer",
+                    default=current.get("modbus_framer", DEFAULT_MODBUS_FRAMER),
+                ): vol.In(["tcp", "rtu"]),
+            }
+        )
+
+        errors = {}
+        if user_input is not None:
+            errors = await self._async_validate_connection(user_input)
+            if not errors:
+                # Verify the device serial matches this entry's unique_id
+                if entry.unique_id:
+                    serial = await async_get_device_serial({**current, **user_input})
+                    if serial and f"neopool_{serial}" != entry.unique_id:
+                        errors[CONF_HOST] = "serial_mismatch"
+                    elif not serial:
+                        errors[CONF_HOST] = "cannot_read_modbus"
+
+            if not errors:
+                new_data = {**current, **user_input}
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data=new_data,
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: NeoPoolConfigEntry,
+    ) -> NeoPoolOptionsFlowHandler:
+        """Return the options flow."""
+        return NeoPoolOptionsFlowHandler()

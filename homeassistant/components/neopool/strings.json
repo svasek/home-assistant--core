@@ -1,0 +1,644 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "entry_not_found": "The integration entry could not be found.",
+      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+    },
+    "error": {
+      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
+      "cannot_read_modbus": "Connected, but cannot read from the Modbus device. Check slave ID and framer settings.",
+      "name_already_used": "This device name is already in use. Please choose a different name.",
+      "serial_mismatch": "The device at this address has a different serial number than the one originally configured."
+    },
+    "step": {
+      "reconfigure": {
+        "data": {
+          "host": "[%key:common::config_flow::data::host%]",
+          "modbus_framer": "[%key:component::neopool::config::step::user::data::modbus_framer%]",
+          "port": "[%key:common::config_flow::data::port%]",
+          "slave_id": "[%key:component::neopool::config::step::user::data::slave_id%]"
+        },
+        "data_description": {
+          "host": "[%key:component::neopool::config::step::user::data_description::host%]",
+          "modbus_framer": "[%key:component::neopool::config::step::user::data_description::modbus_framer%]",
+          "port": "[%key:component::neopool::config::step::user::data_description::port%]",
+          "slave_id": "[%key:component::neopool::config::step::user::data_description::slave_id%]"
+        },
+        "description": "Update the connection settings for your NeoPool controller.",
+        "title": "Reconfigure NeoPool Connection"
+      },
+      "user": {
+        "data": {
+          "filtration_pump_power": "Filtration pump power (W, 0 = disabled)",
+          "host": "[%key:common::config_flow::data::host%]",
+          "modbus_framer": "Modbus framer",
+          "name": "[%key:common::config_flow::data::name%]",
+          "name_default": "Pool",
+          "port": "[%key:common::config_flow::data::port%]",
+          "scan_interval": "Data update interval (seconds)",
+          "slave_id": "Slave ID",
+          "use_cover_sensor": "Enable Pool Cover Sensor",
+          "use_filtration1": "Enable 1st filtration timer for automatic mode",
+          "use_filtration2": "Enable 2nd filtration timer for automatic mode",
+          "use_filtration3": "Enable 3rd filtration timer for automatic mode",
+          "use_light": "Enable Light Relay"
+        },
+        "data_description": {
+          "filtration_pump_power": "Set the rated wattage of the filtration pump. When non-zero, two sensors are created: instantaneous power (W) and cumulative energy (Wh), both usable in the Energy dashboard.",
+          "host": "Enter the IP address of the Modbus TCP gateway connected to your pool controller.",
+          "modbus_framer": "Select 'tcp' for gateways that convert between TCP and RTU. Select 'rtu' for transparent gateways that forward raw RTU frames over TCP.",
+          "name": "Used as a prefix for all entity IDs. Spaces become underscores, e.g. 'Pool West' → sensor.pool_west_measure_ph.",
+          "port": "Standard Modbus TCP port (default: 502). Change only if your gateway uses a non-standard port.",
+          "scan_interval": "How often the integration reads data from the pool controller.",
+          "slave_id": "The Modbus slave address of the pool controller. Most setups use 1.",
+          "use_cover_sensor": "Creates a binary sensor indicating whether the pool cover is open or closed.",
+          "use_filtration1": "Creates timer entities for configuring automatic filtration schedule.",
+          "use_filtration2": "[%key:component::neopool::config::step::user::data_description::use_filtration1%]",
+          "use_filtration3": "[%key:component::neopool::config::step::user::data_description::use_filtration1%]",
+          "use_light": "Creates entities to control and monitor the pool light relay."
+        },
+        "description": "Configure the connection to your NeoPool controller.",
+        "title": "NeoPool Connection"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "aux1": {"name": "Relay Aux1"},
+      "aux2": {"name": "Relay Aux2"},
+      "aux3": {"name": "Relay Aux3"},
+      "aux4": {"name": "Relay Aux4"},
+      "chlorine_control_module": {"name": "Chlorine Regulation Active"},
+      "chlorine_flow_sensor_problem": {"name": "Chlorine Flow Sensor"},
+      "chlorine_measurement_active": {"name": "Chlorine Measurement"},
+      "chlorine_pump_active": {"name": "Chlorine Pump Active"},
+      "conductivity_control_module": {"name": "Conductivity Regulation Active"},
+      "conductivity_measurement_active": {"name": "Conductivity Measurement"},
+      "conductivity_pump_active": {"name": "Conductivity Pump Active"},
+      "device_time_out_of_sync": {"name": "Device Time Sync"},
+      "filtration_pump": {"name": "Filtration Active"},
+      "heating": {"name": "Heating"},
+      "hidro_activated_by_the_cl_module": {"name": "Hydrolysis Activated by Chlorine Module"},
+      "hidro_activated_by_the_rx_module": {"name": "Hydrolysis Activated by Redox Module"},
+      "hidro_chlorine_shock_mode": {"name": "Hydrolysis Chlorine Shock Mode (Boost)"},
+      "hidro_low_flow": {"name": "Hydrolysis Production Problem"},
+      "hidro_module_active": {"name": "Hydrolysis Enabled"},
+      "hidro_module_regulated": {"name": "Hydrolysis Regulation Active"},
+      "ion_low_flow": {"name": "Ionizer Production Problem"},
+      "ion_on_target": {"name": "Ionizer On Target"},
+      "ion_program_time_exceeded": {"name": "Ionizer Program Time Exceeded"},
+      "ph_acid_pump": {"name": "pH Acid Pump"},
+      "ph_control_module": {"name": "pH Regulation Active"},
+      "ph_measurement_active": {"name": "pH Measurement"},
+      "ph_module_control_status": {"name": "pH Flow Detection Control"},
+      "pool_cover": {"name": "Pool Cover"},
+      "pool_light": {"name": "Pool Light"},
+      "redox_control_module": {"name": "Redox Regulation Active"},
+      "redox_measurement_active": {"name": "Redox Measurement"},
+      "redox_pump_active": {"name": "Redox Pump Active"},
+      "uv_lamp": {"name": "UV Lamp"}
+    },
+    "button": {
+      "backwash": {"name": "Start Backwash"},
+      "escape": {"name": "Clear Error Messages"},
+      "reset_cell_partial": {"name": "Reset cell runtime counter"},
+      "sync_time": {"name": "Synchronize Device Time"}
+    },
+    "light": {"light": {"name": "Pool Light"}},
+    "number": {
+      "cl1": {"name": "Chlorine Setpoint"},
+      "heating_temp": {"name": "Temperature Setpoint"},
+      "hidro": {"name": "Hydrolisis Target Production Level"},
+      "hidro_cover_reduction": {"name": "Cover Reduction (when covered)"},
+      "hidro_shutdown_temperature": {"name": "Hydrolysis Shutdown Temp. Threshold"},
+      "ph1": {"name": "pH Max Limit"},
+      "ph2": {"name": "pH Min Limit"},
+      "rx1": {"name": "Redox Setpoint"},
+      "smart_temp_high": {"name": "Smart upper temperature"},
+      "smart_temp_low": {"name": "Smart lower temperature"}
+    },
+    "select": {
+      "cell_boost": {
+        "name": "Boost Mode",
+        "state": {
+          "active": "Active",
+          "active_redox": "Active (Redox control)",
+          "inactive": "Inactive"
+        }
+      },
+      "filt_mode": {
+        "name": "Filtration Mode",
+        "state": {
+          "auto": "Automatic",
+          "backwash": "Backwash",
+          "heating": "Heating",
+          "intelligent": "Intelligent",
+          "manual": "Manual",
+          "smart": "Smart"
+        }
+      },
+      "filtration1_speed": {
+        "name": "Timer 1 - Filtration Speed",
+        "state": {"high": "High", "low": "Low", "mid": "Medium"}
+      },
+      "filtration1_start": {"name": "Timer 1 - Filtration Start"},
+      "filtration1_stop": {"name": "Timer 1 - Filtration Stop"},
+      "filtration2_speed": {
+        "name": "Timer 2 - Filtration Speed",
+        "state": {"high": "High", "low": "Low", "mid": "Medium"}
+      },
+      "filtration2_start": {"name": "Timer 2 - Filtration Start"},
+      "filtration2_stop": {"name": "Timer 2 - Filtration Stop"},
+      "filtration3_speed": {
+        "name": "Timer 3 - Filtration Speed",
+        "state": {"high": "High", "low": "Low", "mid": "Medium"}
+      },
+      "filtration3_start": {"name": "Timer 3 - Filtration Start"},
+      "filtration3_stop": {"name": "Timer 3 - Filtration Stop"},
+      "filtration_speed": {
+        "name": "Filtration speed",
+        "state": {"high": "High", "low": "Low", "mid": "Medium"}
+      },
+      "filtvalve_mode": {
+        "name": "Backwash Valve Mode",
+        "state": {
+          "always_off": "Always Off",
+          "always_on": "Always On",
+          "enabled": "Automatic"
+        }
+      },
+      "filtvalve_period_minutes": {
+        "name": "Backwash Repeat Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "intelligent_filt_min_time": {"name": "Intelligent: Minimum Filtration Time"},
+      "relay_activation_delay": {
+        "name": "pH pump activation delay",
+        "state": {
+          "10": "10 seconds",
+          "10800": "3 hours",
+          "120": "2 minutes",
+          "180": "3 minutes",
+          "1800": "30 minutes",
+          "20": "20 seconds",
+          "30": "30 seconds",
+          "300": "5 minutes",
+          "3600": "1 hour",
+          "40": "40 seconds",
+          "50": "50 seconds",
+          "60": "1 minute",
+          "900": "15 minutes"
+        }
+      },
+      "relay_aux1_mode": {
+        "name": "Relay Aux1 Mode",
+        "state": {
+          "auto": "Automatic",
+          "auto_linked": "Automatic (linked)",
+          "disabled": "Disabled",
+          "off": "Off",
+          "on": "On"
+        }
+      },
+      "relay_aux1_period": {
+        "name": "Timer Aux1 (1) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux1_start": {"name": "Timer Aux1 (1) - Start"},
+      "relay_aux1_stop": {"name": "Timer Aux1 (1) - Stop"},
+      "relay_aux1b_period": {
+        "name": "Timer Aux1 (2) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux1b_start": {"name": "Timer Aux1 (2) - Start"},
+      "relay_aux1b_stop": {"name": "Timer Aux1 (2) - Stop"},
+      "relay_aux2_mode": {
+        "name": "Relay Aux2 Mode",
+        "state": {
+          "auto": "Automatic",
+          "auto_linked": "Automatic (linked)",
+          "disabled": "Disabled",
+          "off": "Off",
+          "on": "On"
+        }
+      },
+      "relay_aux2_period": {
+        "name": "Timer Aux2 (1) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux2_start": {"name": "Timer Aux2 (1) - Start"},
+      "relay_aux2_stop": {"name": "Timer Aux2 (1) - Stop"},
+      "relay_aux2b_period": {
+        "name": "Timer Aux2 (2) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux2b_start": {"name": "Timer Aux2 (2) - Start"},
+      "relay_aux2b_stop": {"name": "Timer Aux2 (2) - Stop"},
+      "relay_aux3_mode": {
+        "name": "Relay Aux3 Mode",
+        "state": {
+          "auto": "Automatic",
+          "auto_linked": "Automatic (linked)",
+          "disabled": "Disabled",
+          "off": "Off",
+          "on": "On"
+        }
+      },
+      "relay_aux3_period": {
+        "name": "Timer Aux3 (1) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux3_start": {"name": "Timer Aux3 (1) - Start"},
+      "relay_aux3_stop": {"name": "Timer Aux3 (1) - Stop"},
+      "relay_aux3b_period": {
+        "name": "Timer Aux3 (2) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux3b_start": {"name": "Timer Aux3 (2) - Start"},
+      "relay_aux3b_stop": {"name": "Timer Aux3 (2) - Stop"},
+      "relay_aux4_mode": {
+        "name": "Relay Aux4 Mode",
+        "state": {
+          "auto": "Automatic",
+          "auto_linked": "Automatic (linked)",
+          "disabled": "Disabled",
+          "off": "Off",
+          "on": "On"
+        }
+      },
+      "relay_aux4_period": {
+        "name": "Timer Aux4 (1) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux4_start": {"name": "Timer Aux4 (1) - Start"},
+      "relay_aux4_stop": {"name": "Timer Aux4 (1) - Stop"},
+      "relay_aux4b_period": {
+        "name": "Timer Aux4 (2) - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_aux4b_start": {"name": "Timer Aux4 (2) - Start"},
+      "relay_aux4b_stop": {"name": "Timer Aux4 (2) - Stop"},
+      "relay_light_mode": {
+        "name": "Light Mode",
+        "state": {"auto": "Automatic", "disabled": "Disabled", "off": "Off", "on": "On"}
+      },
+      "relay_light_period": {
+        "name": "Light Timer - Interval",
+        "state": {
+          "1_day": "1 day",
+          "1_week": "1 week",
+          "2_days": "2 days",
+          "2_weeks": "2 weeks",
+          "3_days": "3 days",
+          "3_weeks": "3 weeks",
+          "4_days": "4 days",
+          "4_weeks": "4 weeks",
+          "5_days": "5 days"
+        }
+      },
+      "relay_light_start": {"name": "Light Timer - Start"},
+      "relay_light_stop": {"name": "Light Timer - Stop"}
+    },
+    "sensor": {
+      "cell_runtime_part": {"name": "Cell runtime since reset"},
+      "cell_runtime_pol_changes": {"name": "Cell polarity changes"},
+      "cell_runtime_pola": {"name": "Cell runtime in polarity 1"},
+      "cell_runtime_polb": {"name": "Cell runtime in polarity 2"},
+      "cell_runtime_total": {"name": "Cell runtime total"},
+      "device_time": {"name": "Device Time"},
+      "filt_mode": {
+        "name": "Filtration Mode",
+        "state": {
+          "auto": "Automatic",
+          "backwash": "Backwash",
+          "heating": "Heating",
+          "intelligent": "Intelligent",
+          "manual": "Manual",
+          "smart": "Smart"
+        }
+      },
+      "filtration_pump_energy": {"name": "Filtration Pump Energy"},
+      "filtration_pump_power": {"name": "Filtration Pump Power"},
+      "filtration_remaining": {"name": "Filtration Time Remaining"},
+      "filtration_speed": {
+        "name": "Current filtration speed",
+        "state": {"high": "High", "low": "Low", "mid": "Medium", "off": "Off"}
+      },
+      "filtvalve_remaining": {"name": "Backwash Time Remaining"},
+      "hidro_current": {"name": "Hydrolysis Intensity"},
+      "hidro_polarity": {
+        "name": "Hydrolysis Polarity",
+        "state": {
+          "dead_time": "Dead Time",
+          "no_flow": "No Flow",
+          "off": "Off",
+          "pol1": "Polarity 1",
+          "pol2": "Polarity 2"
+        }
+      },
+      "hidro_voltage": {"name": "Hydrolysis Voltage"},
+      "intelligent_intervals": {"name": "Intelligent Mode Intervals"},
+      "intelligent_tt_next_interval": {"name": "Intelligent Mode Next Interval Start"},
+      "ion_current": {"name": "Ionization Level"},
+      "ion_polarity": {
+        "name": "Ionizer Polarity",
+        "state": {
+          "dead_time": "Dead Time",
+          "off": "Off",
+          "pol1": "Polarity 1",
+          "pol2": "Polarity 2"
+        }
+      },
+      "measure_cl": {"name": "Salt Level"},
+      "measure_conductivity": {"name": "Conductivity Level"},
+      "measure_ph": {"name": "pH Level"},
+      "measure_rx": {"name": "Redox Potential"},
+      "measure_temperature": {"name": "Water Temperature"},
+      "ph_pump_status": {
+        "name": "pH Pump Status",
+        "state": {
+          "acid": "Acid Pump",
+          "base": "Base Pump",
+          "both": "Both Pumps",
+          "idle": "Idle",
+          "off": "Off"
+        }
+      },
+      "ph_status_alarm": {
+        "name": "pH Alarm",
+        "state": {
+          "ok": "OK",
+          "ph_high": "pH too high",
+          "ph_low": "pH too low",
+          "ph_over": "pH higher than the set point",
+          "ph_under": "pH lower than the set point",
+          "pump_stopped": "Pump stopped (exceeded working time)",
+          "tank_level": "Tank level alarm"
+        }
+      }
+    },
+    "switch": {
+      "aux1": {"name": "Relay Aux1"},
+      "aux2": {"name": "Relay Aux2"},
+      "aux3": {"name": "Relay Aux3"},
+      "aux4": {"name": "Relay Aux4"},
+      "clima_onoff": {"name": "Climate mode for heating"},
+      "filt_manual_state": {"name": "Manual Filtration"},
+      "hidro_cover_enable": {"name": "Enable cover reduction (when covered)"},
+      "hidro_temp_shutdown": {"name": "Enable hydrolysis shutdown on high temperature"},
+      "smart_anti_freeze": {"name": "Smart antifreeze"},
+      "time_auto_sync": {"name": "Time Auto Sync"},
+      "uv_mode": {"name": "UV Mode"},
+      "winter_mode": {"name": "Winter Mode"}
+    }
+  },
+  "exceptions": {
+    "entry_not_found": {"message": "No NeoPool config entry found for entry_id {entry_id}"},
+    "invalid_apply": {"message": "Invalid apply {apply}: must be a boolean (true/false)"},
+    "invalid_register_float": {"message": "Invalid {name} {value}: use an integer, not a float"},
+    "invalid_register_type": {"message": "Invalid {name} {value}: use a decimal number or hex (0x…)"},
+    "invalid_timer": {"message": "Invalid timer name {timer_name}. Valid timers: {valid_timers}"},
+    "invalid_timer_time": {
+      "message": "Invalid timer time format (start: {start}, stop: {stop}). Use HH:MM (e.g. 08:30)."
+    },
+    "missing_parameter": {"message": "Missing required parameter {parameter}"},
+    "no_coordinator": {"message": "No NeoPool coordinator found for entry_id {entry_id}"},
+    "no_loaded_entry": {"message": "No loaded NeoPool config entry available"},
+    "register_out_of_range": {"message": "{name} {value} out of range (0-65535)"},
+    "register_read_failed": {"message": "Register read failed at {address}: {error}"},
+    "register_write_failed": {"message": "Register write failed at {address}: {error}"},
+    "timer_failed": {"message": "Timer setting failed: {error}"},
+    "write_failed": {"message": "Write to register {address} failed"},
+    "write_verification_failed": {
+      "message": "Write verification failed at {address}: wrote {value}, read back {confirmed}"
+    }
+  },
+  "issues": {
+    "corrupted_gpio": {
+      "description": "The following GPIO register(s) on your pool controller contain invalid values:\n\n{details}\n\nThis typically happens when the Modbus gateway framing mode does not match the integration's framer setting. The affected function(s) will not work correctly until the register(s) are restored to valid values.\n\nSee the integration documentation for repair instructions.",
+      "title": "Corrupted GPIO register(s) detected"
+    }
+  },
+  "options": {
+    "error": {
+      "unlock_advanced_error": "Invalid password. Try again or remove the password."
+    },
+    "step": {
+      "advanced": {
+        "data": {
+          "dev_overrides": "Developer overrides (JSON object of \"key\":value)",
+          "dev_overrides_enabled": "Enable developer overrides",
+          "enable_backwash_option": "[%key:component::neopool::options::step::init::data::enable_backwash_option%]"
+        },
+        "data_description": {
+          "dev_overrides": "A JSON object where each key is a Modbus register name and each value overrides the actual reading.",
+          "dev_overrides_enabled": "When enabled, values from the override JSON are injected into coordinator data for testing.",
+          "enable_backwash_option": "Adds 'Backwash' to the filtration mode select. Use with caution — improper use may damage your filtration system."
+        },
+        "description": "⚠️ WARNING: Incorrect use may damage filtration!",
+        "title": "Advanced Settings"
+      },
+      "init": {
+        "data": {
+          "enable_backwash_option": "Enable 'Backwash' mode",
+          "filtration_pump_power": "[%key:component::neopool::config::step::user::data::filtration_pump_power%]",
+          "measure_when_filtration_off": "Measure values even when filtration is off",
+          "scan_interval": "[%key:component::neopool::config::step::user::data::scan_interval%]",
+          "timer_resolution": "Timer adjustment step (minutes)",
+          "unlock_advanced": "Unlock advanced options",
+          "use_aux1": "Enable Aux1 Relay",
+          "use_aux2": "Enable Aux2 Relay",
+          "use_aux3": "Enable Aux3 Relay",
+          "use_aux4": "Enable Aux4 Relay",
+          "use_cover_sensor": "[%key:component::neopool::config::step::user::data::use_cover_sensor%]",
+          "use_filtration1": "[%key:component::neopool::config::step::user::data::use_filtration1%]",
+          "use_filtration2": "[%key:component::neopool::config::step::user::data::use_filtration2%]",
+          "use_filtration3": "[%key:component::neopool::config::step::user::data::use_filtration3%]",
+          "use_light": "[%key:component::neopool::config::step::user::data::use_light%]"
+        },
+        "data_description": {
+          "enable_backwash_option": "Adds 'Backwash' to the filtration mode select. Only for systems with manual multi-way valves.",
+          "filtration_pump_power": "[%key:component::neopool::config::step::user::data_description::filtration_pump_power%]",
+          "measure_when_filtration_off": "When disabled, chemical measurements (pH, ORP, etc.) are only taken while the filtration pump is running.",
+          "scan_interval": "Lower values increase responsiveness but generate more Modbus traffic.",
+          "timer_resolution": "Determines the granularity of time selections in timer entities.",
+          "unlock_advanced": "Enter the unlock code to access advanced settings (format: device_prefix + current year).",
+          "use_aux1": "Creates switch and timer entities for this auxiliary relay output.",
+          "use_aux2": "[%key:component::neopool::options::step::init::data_description::use_aux1%]",
+          "use_aux3": "[%key:component::neopool::options::step::init::data_description::use_aux1%]",
+          "use_aux4": "[%key:component::neopool::options::step::init::data_description::use_aux1%]",
+          "use_cover_sensor": "Creates a binary sensor and enables cover-related entities (hydrolysis cover reduction, shutdown temperature).",
+          "use_filtration1": "[%key:component::neopool::config::step::user::data_description::use_filtration1%]",
+          "use_filtration2": "[%key:component::neopool::config::step::user::data_description::use_filtration1%]",
+          "use_filtration3": "[%key:component::neopool::config::step::user::data_description::use_filtration1%]",
+          "use_light": "[%key:component::neopool::config::step::user::data_description::use_light%]"
+        },
+        "description": "WARNING: Changing enabled relays will automatically reload the integration! Changes take effect immediately.",
+        "title": "NeoPool Settings"
+      }
+    }
+  },
+  "services": {
+    "read_register": {
+      "description": "Read one or more Modbus registers and return the raw u16 values. Picks Read Input Registers (FC04) for MEASURE-page addresses (0x0100-0x01FF) and Read Holding Registers (FC03) elsewhere.",
+      "fields": {
+        "address": {
+          "description": "Modbus register address (decimal or hex, e.g. 258 or 0x0102).",
+          "name": "Register address"
+        },
+        "count": {
+          "description": "Number of consecutive registers to read (1-31; the firmware refuses larger requests).",
+          "name": "Count"
+        },
+        "entry_id": {
+          "description": "The unique ID of the integration entry. Optional.",
+          "name": "Entry ID"
+        }
+      },
+      "name": "Read register"
+    },
+    "set_timer": {
+      "description": "Set or update a timer on the pool controller.",
+      "fields": {
+        "enable": {
+          "description": "Relay-mode integer (0=disabled, 1=auto, 2=auto_linked, 3=on, 4=off). Used by the relay_mode select platform.",
+          "name": "Enable mode"
+        },
+        "entry_id": {
+          "description": "The unique ID of the integration entry. Optional.",
+          "name": "Entry ID"
+        },
+        "period": {
+          "description": "Repeat interval in seconds for AUX/Light timers (e.g., 86400 = every day). Not used for filtration timers.",
+          "name": "Repeat interval"
+        },
+        "start": {
+          "description": "Start time in HH:MM format (e.g., 08:00).",
+          "name": "Start time"
+        },
+        "stop": {
+          "description": "Stop time in HH:MM format (e.g., 16:00).",
+          "name": "Stop time"
+        },
+        "timer": {
+          "description": "The timer identifier (e.g., filtration1, filtration2, etc.).",
+          "name": "Timer name"
+        }
+      },
+      "name": "Set timer"
+    },
+    "write_register": {
+      "description": "Write a value to a Modbus holding register using FC16 with read-back verification.",
+      "fields": {
+        "address": {
+          "description": "Modbus register address (decimal or hex, e.g. 1539 or 0x0603).",
+          "name": "Register address"
+        },
+        "apply": {
+          "description": "Save to EEPROM and execute after write (default: true).",
+          "name": "Apply"
+        },
+        "entry_id": {
+          "description": "The unique ID of the integration entry. Optional.",
+          "name": "Entry ID"
+        },
+        "value": {
+          "description": "Value to write (0-65535, decimal or hex).",
+          "name": "Value"
+        }
+      },
+      "name": "Write register"
+    }
+  }
+}
